@@ -4,6 +4,8 @@ import jax.numpy as jnp
 import jax.random as jr
 import equinox as eqx
 
+from .unet import UNet
+
 Array = jnp.ndarray
 
 
@@ -50,30 +52,66 @@ class FourierFeatures(eqx.Module):
 class ScoreNetwork(eqx.Module):
     gamma_0: float
     gamma_1: float
-    fourier_features: Optional[eqx.Module] = None
-    net: eqx.nn.MLP
+    net: eqx.Module
 
-    def __init__(self, in_size, width_size, depth, activation, gamma_0, gamma_1, fourier_features, *, key):
-        key, _key = jr.split(key)
+    def __init__(self, data_shape, context_dim, gamma_0, gamma_1, *, key):
         self.gamma_0 = gamma_0
         self.gamma_1 = gamma_1
-        self.fourier_features = fourier_features
-        self.net = eqx.nn.MLP(
-            39, #in_size + 1 if fourier_features is not None else 39 #in_size + 1 + (in_size + 1) * 6 * 2, 
-            in_size, 
-            width_size, 
-            depth, 
-            activation=activation, 
-            key=_key)
+        # self.net = Mixer2d(
+        #     data_shape,
+        #     patch_size=4,
+        #     hidden_size=64,
+        #     mix_patch_size=64,
+        #     mix_hidden_size=64,
+        #     num_blocks=3,
+        #     context_dim=context_dim,
+        #     key=key
+        # )
+        self.net = UNet(
+            data_shape=data_shape,
+            is_biggan=False,
+            dim_mults=[1, 2, 4, 8],
+            hidden_size=256,
+            heads=4,
+            dim_head=32,
+            dropout_rate=0.,
+            num_res_blocks=2,
+            attn_resolutions=[16],
+            key=key
+        )
 
-    def __call__(self, z, gamma_t):
+    def __call__(self, z, gamma_t, key):
         _gamma_t = 2. * (gamma_t - self.gamma_0) / (self.gamma_1 - self.gamma_0) - 1.
-        h = jnp.concatenate([z, _gamma_t]) 
-        if self.fourier_features is not None:
-            h_ff = self.fourier_features(h)
-            h = jnp.concatenate([h, h_ff])
-        h = self.net(h)
+        h = self.net(_gamma_t, z, key=key)
         return h
+
+# class ScoreNetwork(eqx.Module):
+#     gamma_0: float
+#     gamma_1: float
+#     fourier_features: Optional[eqx.Module] = None
+#     net: eqx.nn.MLP
+
+#     def __init__(self, in_size, width_size, depth, activation, gamma_0, gamma_1, fourier_features, *, key):
+#         key, _key = jr.split(key)
+#         self.gamma_0 = gamma_0
+#         self.gamma_1 = gamma_1
+#         self.fourier_features = fourier_features
+#         self.net = eqx.nn.MLP(
+#             39, #in_size + 1 if fourier_features is not None else 39 #in_size + 1 + (in_size + 1) * 6 * 2, 
+#             in_size, 
+#             width_size, 
+#             depth, 
+#             activation=activation, 
+#             key=_key)
+
+#     def __call__(self, z, gamma_t):
+#         _gamma_t = 2. * (gamma_t - self.gamma_0) / (self.gamma_1 - self.gamma_0) - 1.
+#         h = jnp.concatenate([z, _gamma_t]) 
+#         if self.fourier_features is not None:
+#             h_ff = self.fourier_features(h)
+#             h = jnp.concatenate([h, h_ff])
+#         h = self.net(h)
+#         return h
 
 
 class NoiseSchedule(eqx.Module):

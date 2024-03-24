@@ -22,8 +22,7 @@ def cifar10(key: jr.PRNGKey) -> ScalerDataset:
         [
             transforms.Resize((n_pix, n_pix)),
             transforms.RandomHorizontalFlip(),
-            # transforms.RandomVerticalFlip(),
-            transforms.ToTensor(), # This magically [0,255] -> [0,1]??
+            transforms.ToTensor(), # This magically does [0,255] -> [0,1]?
             transforms.Lambda(scaler.forward) # [0,1] -> [-1,1]
         ]
     )

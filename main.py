@@ -12,10 +12,11 @@ import einops
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tqdm import trange
-from tensorflow_probability.substrates.jax import distributions as tfd
 
-from models import VDM, NoiseScheduleNN, Mixer2d, UNet
+from models import VDM, NoiseScheduleNN, ScoreNetwork
 from data.utils import ScalerDataset
+from train import make_step, batch_loss_fn
+from sample import sample_fn
 
 
 def get_sharding():
@@ -35,182 +36,11 @@ def get_sharding():
     return sharding
 
 
-def put_on_sharding(x, sharding):
-    if sharding is not None:
-        x = jax.device_put(x, sharding)
-    return x
-
-
-class ScoreNetwork(eqx.Module):
-    gamma_0: float
-    gamma_1: float
-    net: eqx.Module
-
-    def __init__(self, data_shape, context_dim, gamma_0, gamma_1, *, key):
-        self.gamma_0 = gamma_0
-        self.gamma_1 = gamma_1
-        # self.net = Mixer2d(
-        #     data_shape,
-        #     patch_size=4,
-        #     hidden_size=64,
-        #     mix_patch_size=64,
-        #     mix_hidden_size=64,
-        #     num_blocks=3,
-        #     context_dim=context_dim,
-        #     key=key
-        # )
-        self.net = UNet(
-            data_shape=data_shape,
-            is_biggan=False,
-            dim_mults=[1, 2, 4, 8],
-            hidden_size=256,
-            heads=4,
-            dim_head=32,
-            dropout_rate=0.,
-            num_res_blocks=2,
-            attn_resolutions=[16],
-            key=key
-        )
-
-    def __call__(self, z, gamma_t, key):
-        _gamma_t = 2. * (gamma_t - self.gamma_0) / (self.gamma_1 - self.gamma_0) - 1.
-        h = self.net(_gamma_t, z, key=key)
-        return h
-
-
-def _var(gamma):
-    return jax.nn.sigmoid(gamma)
-
-
-def _alpha_sigma(gamma):
-    var = _var(gamma)
-    return jnp.sqrt(1. - var), jnp.sqrt(var)
-
-
-def _encode(x):
-    return x#(x - x.mean()) / x.std()
-
-
-def _decode(z_0_rescaled, gamma_0, key):
-    dist = tfd.Independent(
-        tfd.Normal(
-            z_0_rescaled, jnp.array([1e-3])
-        ),  #jnp.exp(0.5 * gamma_0)),
-        reinterpreted_batch_ndims=3
-    )
-    return dist.sample(seed=key)
-
-
-def _logprob(x, z_0_rescaled, gamma_0):
-    dist = tfd.Independent(
-        tfd.Normal(
-            z_0_rescaled, jnp.array([1e-3])
-        ),  #jnp.exp(0.5 * gamma_0)),
-        reinterpreted_batch_ndims=3
-    )
-    return dist.log_prob(x)
-
-
-def _generate_x(z_0, gamma_0, key):
-    alpha_0, _ = _alpha_sigma(gamma_0)
-    z_0_rescaled = z_0 / alpha_0
-    sample = _decode(z_0_rescaled, gamma_0, key)
-    return sample
-
-def get_gamma_alpha_sigma(vdm, t):
-    gamma_t = vdm.gamma(t)
-    return gamma_t, *_alpha_sigma(gamma_t)
-
-def vlb(vdm, x, key, t=None, shard=jax.sharding.Sharding | None):
-    key, key_0, key_d = jr.split(key, 3)
-
-    gamma_0, alpha_0, sigma_0 = get_gamma_alpha_sigma(vdm, 0.)
-    gamma_t, alpha_t, sigma_t = get_gamma_alpha_sigma(vdm, t)
-    gamma_1, alpha_1, sigma_1 = get_gamma_alpha_sigma(vdm, 1.)
-
-    # encode
-    f = _encode(x)
-
-    # 1. RECONSTRUCTION LOSS
-    # add noise and reconstruct
-    eps_0 = jr.normal(key_0, shape=f.shape)
-    eps_0 = jax.device_put(eps_0, shard)
-    z_0 = alpha_0 * f + sigma_0 * eps_0
-    z_0_rescaled = f + jnp.exp(0.5 * gamma_0) * eps_0  # = z_0/sqrt(1-var)
-    loss_recon = -_logprob(f, z_0_rescaled, gamma_0)
-
-    # 2. LATENT LOSS
-    # KL z1 with N(0,1) prior
-    mean1_sqr = jnp.square(alpha_1 * f)
-    loss_klz = 0.5 * jnp.sum(mean1_sqr + sigma_1 ** 2. - jnp.log(sigma_1 ** 2.) - 1.)
-
-    # 3. DIFFUSION LOSS
-    # discretize time steps if we're working with discrete time
-    if T_train > 0:
-        t = jnp.ceil(t * T_train) / T_train
-
-    # sample z_t 
-    eps = jr.normal(key_d, shape=f.shape)
-    eps = jax.device_put(eps, shard)
-    z_t = alpha_t * f + sigma_t * eps
-    # compute predicted noise
-    key, _ = jr.split(key)
-    eps_ = vdm.score(z_t, gamma_t, key=key)
-    # compute MSE of predicted noise
-    loss_diff_mse = jnp.square(eps - eps_).sum()
-
-    if T_train == 0:
-        # loss for infinite depth T, i.e. continuous time
-        _, g_t_grad = jax.jvp(vdm.gamma, (t,), (jnp.ones_like(t),))
-        loss_diff = 0.5 * g_t_grad * loss_diff_mse
-    else:
-        # loss for finite depth T, i.e. discrete time
-        s = t - (1. / T_train)
-        gamma_s = vdm.gamma(s)
-        loss_diff = 0.5 * T_train * jnp.expm1(gamma_t - gamma_s) * loss_diff_mse
-
-    loss = loss_klz + loss_recon + loss_diff
-    metrics = [loss_klz, loss_recon, loss_diff]
-    return loss, metrics
-
-
-def loss_fn(vdm, key, x, t, shard):
-    loss, metrics = vlb(vdm, x, key, t, shard)
-    return loss, metrics
-
-
-@eqx.filter_jit
-def batch_loss_fn(vdm, key, x, shard): 
-    key, key_t = jr.split(key)
-    keys = jr.split(key, len(x))
-    # Antithetic time sampling for lower variance VLB(x)
-    n = len(x)
-    t = jr.uniform(key_t, (n,), minval=0., maxval=1. / n)
-    t = t + (1. / n) * jnp.arange(n)
-    _fn = eqx.filter_vmap(loss_fn, in_axes=(None, 0, 0, 0, None))
-    loss, metrics = _fn(vdm, keys, x, t, shard)
-    return loss.mean(), [m.mean() for m in metrics]
-
-
-@eqx.filter_jit
-def make_step(vdm, x, key, opt_state, opt_update, shard):
-    loss_fn = eqx.filter_value_and_grad(batch_loss_fn, has_aux=True)
-    (loss, metrics), grads = loss_fn(vdm, key, x, shard)
-    updates, opt_state = opt_update(grads, opt_state, vdm)
-    vdm = eqx.apply_updates(vdm, updates)
-    return vdm, loss, metrics, opt_state
-
-
 def unbatch(batch, sharding=None):
     x, y = batch
     if sharding is not None:
         x, y = jax.device_put((x, y), sharding)
     return x, y
-
-
-def infinite_trainloader(dataloader):
-    while True:
-        yield from dataloader 
 
 
 def plot_metrics(losses, metrics):
@@ -266,67 +96,6 @@ def plot_metrics(losses, metrics):
     # Plot the learned noise schedule, gamma = gamma(t \in [0., 1.]) 
     print('gamma_0', vdm.gamma(0.))
     print('gamma_1', vdm.gamma(1.))
-
-
-@eqx.filter_jit
-def sample_step(i, vdm, T_sample, z_t, key, sharding):
-    key = jr.fold_in(key, i)
-    eps = jr.normal(key, z_t.shape)
-    if sharding is not None:
-        eps = jax.device_put(eps, sharding)
-
-    t = (T_sample - i) / T_sample
-    s = (T_sample - i - 1) / T_sample
-
-    gamma_s = vdm.gamma(s)
-    gamma_t = vdm.gamma(t)
-
-    keys = jr.split(key, len(z_t))
-    if sharding is not None:
-        z_t, gamma_t, keys = jax.device_put(
-            (z_t, gamma_t, keys), sharding
-        )
-    # Was using vdm.score_network, be consistent with methods
-    _fn = jax.vmap(vdm.score_network, in_axes=(0, None, 0))
-    eps_hat = _fn(z_t, gamma_t, keys)
-
-    a = jax.nn.sigmoid(-gamma_s)
-    b = jax.nn.sigmoid(-gamma_t)
-    c = -jnp.expm1(gamma_s - gamma_t)
-    sigma_t = jnp.sqrt(jax.nn.sigmoid(gamma_t))
-
-    z_s = jnp.sqrt(a / b) * (z_t - sigma_t * c * eps_hat) + jnp.sqrt((1. - a) * c) * eps
-
-    alpha_t = jnp.sqrt(1. - b)
-    x_pred = (z_t - sigma_t * eps_hat) / alpha_t
-
-    return z_s, x_pred # return both if not jax.lax.fori_loop
-
-
-def sample_fn(key, vdm, N_sample, T_sample, data_shape, sharding):
-    print("Sampling...")
-
-    z = jr.normal(key, (N_sample,) + data_shape)
-    if sharding is not None:
-        z = jax.device_put(z, sharding)
-
-    def body_fn(i, z_t_and_x):
-        z_t, _ = z_t_and_x
-        fn = lambda z_t, i: sample_step(
-            i, vdm, T_sample, z_t, key, sharding
-        )
-        return fn(z_t, i) # z_t must be first argument
-
-    z, x_pred = jax.lax.fori_loop(
-        lower=0, upper=T_sample, body_fun=body_fn, init_val=(z, z)
-    )
-    key, _ = jr.split(key)
-    x_sample = jax.vmap(_generate_x, in_axes=(0, None, None))(
-        z, vdm.gamma(0.), key
-    )
-    print("...sampled.")
-    print("z, x_pred, x_sample", z.shape, x_pred.shape, x_sample.shape)
-    return z, x_pred, x_sample
 
 
 def plot_train_sample(dataset: ScalerDataset, sample_size, vs=None, cmap=None, filename=None):
@@ -411,15 +180,15 @@ if __name__ == "__main__":
     from data.emnist import emnist
 
     key = jr.PRNGKey(0)
+    key, model_key, sample_key = jr.split(key, 3)
 
     shard = get_sharding()
 
     data_path = "/project/ls-gruen/users/jed.homer/jakob_ift/data/" 
-    dataset_name = "CIFAR10" #"EMNIST"
-
-    dataset = cifar10(key)
 
     # Data hyper-parameters
+    dataset_name = "CIFAR10" #"EMNIST"
+    dataset = cifar10(key)
     context_dim = None
     data_shape = dataset.data_shape
     # Model hyper-parameters
@@ -431,15 +200,14 @@ if __name__ == "__main__":
     n_sample = 64 # Must be sharding congruent?
     # Optimization hyper-parameters
     n_steps = 1_000_000
-    # n_batch = 256 #
-    n_batch = 128 
+    n_batch = 256 
     learning_rate = 5e-5
     # Plotting
     proj_dir = "/project/ls-gruen/users/jed.homer/1pt_pdf/little_studies/vdm/"
     imgs_dir = os.path.join(proj_dir, "imgs_" + dataset_name)
     cmap = "gnuplot"
 
-    key_s, key_n = jr.split(key)
+    key_s, key_n = jr.split(model_key)
     score_network = ScoreNetwork(
         data_shape,
         context_dim,
@@ -450,13 +218,19 @@ if __name__ == "__main__":
     noise_schedule = NoiseScheduleNN(
         init_gamma_0, init_gamma_1, key=key_n
     )
-    vdm = VDM(score_network, noise_schedule)
+    vdm = VDM(
+        score_network=score_network, 
+        noise_network=noise_schedule
+    )
 
     opt = optax.adamw(learning_rate=learning_rate) # schedule
     opt_state = opt.init(eqx.filter(vdm, eqx.is_inexact_array))
   
-    plot_train_sample(dataset, 25, filename=os.path.join(imgs_dir, "data.png"))
-    key, sample_key = jr.split(key)
+    plot_train_sample(
+        dataset, 
+        sample_size=25, 
+        filename=os.path.join(imgs_dir, "data.png")
+    )
 
     losses = []
     metrics = []
@@ -484,7 +258,8 @@ if __name__ == "__main__":
             losses += [(loss_train, loss_valid)]
             metrics += [(train_metrics, valid_metrics)]
             steps.set_postfix(
-                Lt=f"{losses[-1][0]:.4E}", Lv=f"{losses[-1][1]:.4E}"
+                Lt=f"{losses[-1][0]:.3E}", 
+                Lv=f"{losses[-1][1]:.3E}"
             )
 
             # Sample

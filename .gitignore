@@ -3,3 +3,4 @@ datasets/
 *.eqx
 *.png
 *.pdf
+!generated.png
