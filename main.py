@@ -43,7 +43,7 @@ def unbatch(batch, sharding=None):
     return x, y
 
 
-def plot_metrics(losses, metrics):
+def plot_metrics(vdm, losses, metrics):
     Lt, Lv = jnp.asarray(losses).T
     metrics_t, metrics_v = jnp.split(jnp.asarray(metrics), 2, axis=1)
 
@@ -56,7 +56,7 @@ def plot_metrics(losses, metrics):
     vars = jax.nn.sigmoid(gammas) 
 
     kl_t, recon_t, diffusion_t = metrics_t.squeeze().T
-    kl_v, recon_v, diffusion_v = metrics_t.squeeze().T
+    kl_v, recon_v, diffusion_v = metrics_v.squeeze().T
 
     fig, axs = plt.subplots(2, 3, figsize=(10., 6.))
     ax = axs[0, 0]
@@ -147,7 +147,7 @@ def plot_train_sample(dataset: ScalerDataset, sample_size, vs=None, cmap=None, f
 
     # Re-scale data to [0, 1] from [-1, 1] (out of loader) for plotting
     X = dataset.scaler.reverse(X)[:sample_size]
-    print(X.min(), X.max())
+    print("batch X (reverse scaled)", X.min(), X.max())
 
     fig, ax = plt.subplots(dpi=300)
     if dataset.name != "moons":
@@ -155,13 +155,14 @@ def plot_train_sample(dataset: ScalerDataset, sample_size, vs=None, cmap=None, f
     else: 
         ax.scatter(*X.T, c=Q, cmap="PiYG")
     del X, Q
-    ax.set_title("$\delta_g$")
     plt.savefig(filename, bbox_inches="tight")
     plt.close()
 
 
 def plot_samples(samples, filename):
     n_side = int(math.sqrt(len(samples))) 
+    samples = jnp.clip(samples, 0., 1.)
+    # samples = jnp.clip(samples, 0., 1.)
     fig, axs = plt.subplots(n_side, n_side, dpi=300, figsize=(8., 8.))
     c = 0
     for i in range(n_side):
@@ -173,6 +174,21 @@ def plot_samples(samples, filename):
     plt.subplots_adjust(wspace=0.01, hspace=0.01) 
     plt.savefig(os.path.join(imgs_dir, filename), bbox_inches="tight")
     plt.close()
+
+
+def save_opt_state_and_model(
+    opt_state, model, filename_opt, filename_model
+):
+    eqx.tree_serialise_leaves(filename_opt, opt_state)
+    eqx.tree_serialise_leaves(filename_model, model)
+
+
+def load_opt_state_and_model(
+    opt_state, model, filename_opt, filename_model
+):
+    opt_state = eqx.tree_deserialise_leaves(filename_opt, opt_state)
+    model = eqx.tree_deserialise_leaves(filename_model, model)
+    return opt_state, model
 
 
 if __name__ == "__main__":
@@ -195,7 +211,6 @@ if __name__ == "__main__":
     model_name = "vdm_" + dataset_name
     init_gamma_0 = -13.3
     init_gamma_1 = 5. 
-    T_train = 0 
     T_sample = 1000
     n_sample = 64 # Must be sharding congruent?
     # Optimization hyper-parameters
@@ -206,6 +221,8 @@ if __name__ == "__main__":
     proj_dir = "/project/ls-gruen/users/jed.homer/1pt_pdf/little_studies/vdm/"
     imgs_dir = os.path.join(proj_dir, "imgs_" + dataset_name)
     cmap = "gnuplot"
+
+    reload = False
 
     key_s, key_n = jr.split(model_key)
     score_network = ScoreNetwork(
@@ -223,12 +240,20 @@ if __name__ == "__main__":
         noise_network=noise_schedule
     )
 
-    opt = optax.adamw(learning_rate=learning_rate) # schedule
+    opt = optax.adamw(learning_rate=learning_rate)
     opt_state = opt.init(eqx.filter(vdm, eqx.is_inexact_array))
+
+    if reload:
+        opt_state, vdm = load_opt_state_and_model(
+            opt_state,
+            vdm,
+            model_name + "_opt.eqx",
+            model_name + ".eqx"
+        )
   
     plot_train_sample(
         dataset, 
-        sample_size=25, 
+        sample_size=n_sample, 
         filename=os.path.join(imgs_dir, "data.png")
     )
 
@@ -244,14 +269,12 @@ if __name__ == "__main__":
 
             # Train
             x, y = unbatch(train_batch, shard)
-
             vdm, loss_train, train_metrics, opt_state = make_step(
                 vdm, x, train_key, opt_state, opt.update, shard
             )
 
             # Validate
             x, y = unbatch(valid_batch, shard)
-
             loss_valid, valid_metrics = batch_loss_fn(vdm, valid_key, x, shard)
 
             # Record
@@ -270,9 +293,16 @@ if __name__ == "__main__":
                 samples = dataset.scaler.reverse(samples) # [-1, 1] -> [0, 1]
 
                 plot_samples(samples, f"samples_{s:06d}.png")
-                plot_metrics(losses, metrics)
 
-                eqx.tree_serialise_leaves(model_name, vdm)
+                plot_metrics(vdm, losses, metrics)
+
+                save_opt_state_and_model(
+                    opt_state,
+                    vdm,
+                    model_name + "_opt.eqx",
+                    model_name + ".eqx"
+                )
+
 
     def J_fn(vlb_fn, q, x, t, key):
         # Is product of gradients faster than Hessian? VLB ~ logL(x)

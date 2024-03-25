@@ -3,26 +3,13 @@ import jax
 import jax.random as jr
 import jax.numpy as jnp
 import equinox as eqx
-import tensorflow_probability.substrates.jax.distributions as tfd
 
-
-def _var(gamma):
-    return jax.nn.sigmoid(gamma)
-
-
-def _alpha_sigma(gamma):
-    var = _var(gamma)
-    return jnp.sqrt(1. - var), jnp.sqrt(var)
+from sde import _alpha_sigma
 
 
 def _decode(z_0_rescaled, gamma_0, key):
-    dist = tfd.Independent(
-        tfd.Normal(
-            z_0_rescaled, jnp.array([1e-3])
-        ),  #jnp.exp(0.5 * gamma_0)),
-        reinterpreted_batch_ndims=3
-    )
-    return dist.sample(seed=key)
+    n = jr.normal(key, z_0_rescaled.shape) * 1e-3
+    return z_0_rescaled + n
 
 
 def _generate_x(z_0, gamma_0, key):
@@ -39,12 +26,12 @@ def sample_step(
     T_sample: int, 
     z_t: jax.Array, 
     key: jr.PRNGKey, 
-    sharding: jax.sharding.Sharding
+    sharding: jax.sharding.Sharding | None = None
 ) -> Tuple[jax.Array, jax.Array]:
-    key = jr.fold_in(key, i)
-    eps = jr.normal(key, z_t.shape)
-    if sharding is not None:
-        eps = jax.device_put(eps, sharding)
+    key_eps, key_time = jr.split(jr.fold_in(key, i))
+    keys_time = jnp.asarray(jr.split(key_time, len(z_t)))
+
+    eps = jr.normal(key_eps, z_t.shape)
 
     t = (T_sample - i) / T_sample
     s = (T_sample - i - 1) / T_sample
@@ -52,14 +39,14 @@ def sample_step(
     gamma_s = vdm.gamma(s)
     gamma_t = vdm.gamma(t)
 
-    keys = jr.split(key, len(z_t))
     if sharding is not None:
-        z_t, gamma_t, keys = jax.device_put(
-            (z_t, gamma_t, keys), sharding
+        eps, z_t, gamma_t, keys_time = jax.device_put(
+            (eps, z_t, gamma_t, keys_time), sharding
         )
+
     # Was using vdm.score_network, be consistent with methods
     _fn = jax.vmap(vdm.score_network, in_axes=(0, None, 0))
-    eps_hat = _fn(z_t, gamma_t, keys)
+    eps_hat = _fn(z_t, gamma_t, keys_time)
 
     a = jax.nn.sigmoid(-gamma_s)
     b = jax.nn.sigmoid(-gamma_t)
@@ -71,7 +58,7 @@ def sample_step(
     alpha_t = jnp.sqrt(1. - b)
     x_pred = (z_t - sigma_t * eps_hat) / alpha_t
 
-    return z_s, x_pred # return both if not jax.lax.fori_loop
+    return z_s, x_pred # Return both if not jax.lax.fori_loop
 
 
 def sample_fn(
@@ -82,28 +69,37 @@ def sample_fn(
     data_shape: Sequence[int], 
     sharding: jax.sharding.Sharding
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
-    print("Sampling...")
+    key_z, key_sample, key_loop = jr.split(key, 3)
 
-    z = jr.normal(key, (N_sample,) + data_shape)
+    z = jr.normal(key_z, (N_sample,) + data_shape)
     if sharding is not None:
         z = jax.device_put(z, sharding)
 
     def body_fn(i, z_t_and_x):
         z_t, _ = z_t_and_x
+        key_i = jr.fold_in(key_loop, i)
         fn = lambda z_t, i: sample_step(
-            i, vdm, T_sample, z_t, key, sharding
+            i, 
+            vdm, 
+            T_sample, 
+            z_t, 
+            key_i,
+            sharding
         )
         return fn(z_t, i) # z_t must be first argument
 
     z, x_pred = jax.lax.fori_loop(
-        lower=0, upper=T_sample, body_fun=body_fn, init_val=(z, z)
+        lower=0, 
+        upper=T_sample, 
+        body_fun=body_fn, 
+        init_val=(z, jnp.zeros_like(z))
     )
-    key, _ = jr.split(key)
-    x_sample = jax.vmap(_generate_x, in_axes=(0, None, None))(
-        z, vdm.gamma(0.), key
+
+    key_samples = jr.split(key_sample, len(z))
+    gamma_0 = vdm.gamma(0.)
+    x_sample = jax.vmap(_generate_x, in_axes=(0, None, 0))(
+        z, gamma_0, key_samples
     )
-    print("...sampled.")
-    print("z, x_pred, x_sample", z.shape, x_pred.shape, x_sample.shape)
     return z, x_pred, x_sample
 
 

@@ -6,7 +6,7 @@ import equinox as eqx
 
 from .unet import UNet
 
-Array = jnp.ndarray
+Array = jax.Array
 
 
 class VDM(eqx.Module):
@@ -17,9 +17,9 @@ class VDM(eqx.Module):
         self.score_network = score_network
         self.noise_network = noise_network
 
-    def __call__(self, x, t, *, key):
-        gamma_t = self.noise_network(t)
-        return self.score_network(x, t, key=key)
+    # def __call__(self, x, t, *, key):
+    #     gamma_t = self.noise_network(t)
+    #     return self.score_network(x, t, key=key)
     
     def score(self, x, gamma_t, *, key):
         return self.score_network(x, jnp.atleast_1d(gamma_t), key=key)
@@ -161,12 +161,11 @@ class NoiseScheduleNN(eqx.Module):
         init_scale = gamma_1 - init_bias
 
         # Baseline linear schedule parameters
-        key, key_w, key_b = jr.split(key, 3)
         self.weight = jnp.array([init_scale])
         self.bias = jnp.array([init_bias])
 
         # Non-linear schedule parameters
-        key, key_2, key_3 = jr.split(key, 3)
+        key_2, key_3 = jr.split(key)
         if self.nonlinear:
             self.l2 = LinearMonotone(
                 in_size=1, out_size=self.n_features, key=key_2)
