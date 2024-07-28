@@ -72,9 +72,9 @@ if __name__ == "__main__":
     sharding = get_sharding()
 
     # Data hyper-parameters
-    dataset_name = "CIFAR10"
     context_dim = None
     data_shape = dataset.data_shape
+    dataset_name = dataset.name
     # Model hyper-parameters
     model_name = "vdm_" + dataset_name
     init_gamma_0 = -13.3
@@ -117,8 +117,6 @@ if __name__ == "__main__":
         x_preds = image_shaper(dataset.scaler.reverse(x_preds))
 
         print("scaled", samples.min(), samples.max())
-        # plot_samples(samples, f"inference_x_{i}.png")
-        # plot_samples(zs, f"inference_z_{i}.png")
 
         fig, axs = plt.subplots(1, 2, figsize=(16., 8.), dpi=300) 
         ax = axs[0]
@@ -127,9 +125,6 @@ if __name__ == "__main__":
         ax = axs[1]
         ax.imshow(samples)
         ax.axis("off")
-        # ax = axs[2]
-        # ax.imshow(x_preds)
-        # ax.axis("off")
         plt.subplots_adjust(wspace=0.01, hspace=0.01)
         plt.savefig(
             os.path.join(imgs_dir, f"inferences_{i}.png"), 

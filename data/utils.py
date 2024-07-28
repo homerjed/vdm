@@ -1,13 +1,12 @@
 import abc
-from typing import Tuple 
+from typing import Tuple, Callable, Union
 from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import jax.random as jr 
+from jaxtyping import Array
 import numpy as np
 import torch
-
-Array = np.ndarray
 
 
 def expand_if_scalar(x):
@@ -53,18 +52,17 @@ class _InMemoryDataLoader(_AbstractDataLoader):
 
 
 class _TorchDataLoader(_AbstractDataLoader):
-    def __init__(self, dataset, *, key):
+    def __init__(self, dataset, num_workers=2, *, key):
         self.dataset = dataset
-        # min = torch.iinfo(torch.int32).min
-        # max = torch.iinfo(torch.int32).max
-        self.seed = int(key.sum().item()) #jr.randint(key, (), min, max).item() # key.sum().item() ?
+        self.seed = int(key.sum().item()) 
+        self.num_workers = num_workers
 
-    def loop(self, batch_size):
+    def loop(self, batch_size, num_workers=None):
         generator = torch.Generator().manual_seed(self.seed)
         dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_size=batch_size,
-            num_workers=2,
+            num_workers=self.num_workers if self.num_workers is not None else num_workers,
             shuffle=True,
             drop_last=True,
             generator=generator,
@@ -77,25 +75,23 @@ class _TorchDataLoader(_AbstractDataLoader):
                 )
 
 
-Loader = _TorchDataLoader | _InMemoryDataLoader
-
-
 @dataclass
 class Dataset:
     name: str
-    train_dataloader: Loader
-    valid_dataloader: Loader
+    train_dataloader: Union[_TorchDataLoader, _InMemoryDataLoader]
+    valid_dataloader: Union[_TorchDataLoader, _InMemoryDataLoader]
     data_shape: Tuple[int]
     context_shape: Tuple[int]
-    mean: jax.Array
-    std: jax.Array
-    max: jax.Array
-    min: jax.Array
+    mean: Array
+    std: Array
+    max: Array
+    min: Array
 
 
 class Scaler:
-    forward: callable 
-    reverse: callable
+    forward: Callable 
+    reverse: Callable
+
     def __init__(self, x_min=0., x_max=1.):
         # [0, 1] -> [-1, 1]
         self.forward = lambda x: 2. * (x - x_min) / (x_max - x_min) - 1.
@@ -106,8 +102,8 @@ class Scaler:
 @dataclass
 class ScalerDataset:
     name: str
-    train_dataloader: Loader
-    valid_dataloader: Loader
+    train_dataloader: Union[_TorchDataLoader, _InMemoryDataLoader]
+    valid_dataloader: Union[_TorchDataLoader, _InMemoryDataLoader]
     data_shape: Tuple[int]
     context_shape: Tuple[int]
     scaler: Scaler
