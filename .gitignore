@@ -7,3 +7,4 @@ datasets/
 !cifar10.png
 !mnist.png
 old.py
+configs/
