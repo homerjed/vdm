@@ -4,4 +4,6 @@ datasets/
 *.png
 *.pdf
 !generated.png
+!cifar10.png
+!mnist.png
 old.py
