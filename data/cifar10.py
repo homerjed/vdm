@@ -34,13 +34,13 @@ def cifar10(key: jr.PRNGKey) -> ScalerDataset:
         ]
     )
     train_dataset = datasets.CIFAR10(
-        "datasets/" + "cifar10", 
+        "/project/ls-gruen/users/jed.homer/data/cifar10/", 
         train=True, 
         download=True, 
         transform=train_transform
     )
     valid_dataset = datasets.CIFAR10(
-        "datasets/" + "cifar10", 
+        "/project/ls-gruen/users/jed.homer/data/cifar10/", 
         train=False, 
         download=True, 
         transform=valid_transform

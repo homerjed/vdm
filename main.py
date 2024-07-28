@@ -98,7 +98,7 @@ def plot_metrics(vdm, losses, metrics):
     print('gamma_1', vdm.gamma(1.))
 
 
-def plot_train_sample(dataset: ScalerDataset, sample_size, vs=None, cmap=None, filename=None):
+def plot_train_sample(dataset: ScalerDataset, sample_size, vs=None, cmap="Blues", filename=None):
     def imgs_to_grid(X):
         """ Arrange images to one grid image """
         # Assumes square number of imgs
@@ -160,6 +160,7 @@ def plot_train_sample(dataset: ScalerDataset, sample_size, vs=None, cmap=None, f
 
 
 def plot_samples(samples, filename):
+    cmap = "Blues"
     n_side = int(math.sqrt(len(samples))) 
     samples = jnp.clip(samples, 0., 1.)
     # samples = jnp.clip(samples, 0., 1.)
@@ -193,7 +194,7 @@ def load_opt_state_and_model(
 
 if __name__ == "__main__":
     from data.cifar10 import cifar10
-    from data.emnist import emnist
+    from data.mnist import mnist
 
     key = jr.PRNGKey(0)
     key, model_key, sample_key = jr.split(key, 3)
@@ -203,10 +204,10 @@ if __name__ == "__main__":
     data_path = "/project/ls-gruen/users/jed.homer/jakob_ift/data/" 
 
     # Data hyper-parameters
-    dataset_name = "CIFAR10" #"EMNIST"
-    dataset = cifar10(key)
+    dataset = mnist(key) # cifar10(key)
     context_dim = None
     data_shape = dataset.data_shape
+    dataset_name = dataset.name
     # Model hyper-parameters
     model_name = "vdm_" + dataset_name
     init_gamma_0 = -13.3
@@ -220,7 +221,7 @@ if __name__ == "__main__":
     # Plotting
     proj_dir = "/project/ls-gruen/users/jed.homer/1pt_pdf/little_studies/vdm/"
     imgs_dir = os.path.join(proj_dir, "imgs_" + dataset_name)
-    cmap = "gnuplot"
+    cmap = "Blues"
 
     reload = False
 
@@ -245,10 +246,10 @@ if __name__ == "__main__":
 
     if reload:
         opt_state, vdm = load_opt_state_and_model(
-            opt_state,
-            vdm,
-            model_name + "_opt.eqx",
-            model_name + ".eqx"
+            opt_state=opt_state,
+            vdm=vdm,
+            filename_opt=model_name + "_opt.eqx",
+            filename_model=model_name + ".eqx"
         )
   
     plot_train_sample(
@@ -270,7 +271,7 @@ if __name__ == "__main__":
             # Train
             x, y = unbatch(train_batch, shard)
             vdm, loss_train, train_metrics, opt_state = make_step(
-                vdm, x, train_key, opt_state, opt.update, shard
+                vdm, train_key, x, opt_state, opt.update, shard
             )
 
             # Validate
@@ -286,7 +287,7 @@ if __name__ == "__main__":
             )
 
             # Sample
-            if s % 1000 == 0:
+            if s % 5_000 == 0:
                 _, _, samples = sample_fn(
                     sample_key, vdm, n_sample, T_sample, data_shape, shard
                 )
@@ -297,148 +298,8 @@ if __name__ == "__main__":
                 plot_metrics(vdm, losses, metrics)
 
                 save_opt_state_and_model(
-                    opt_state,
-                    vdm,
-                    model_name + "_opt.eqx",
-                    model_name + ".eqx"
+                    opt_state=opt_state,
+                    model=vdm,
+                    filename_opt=model_name + "_opt.eqx",
+                    filename_model=model_name + ".eqx"
                 )
-
-
-    def J_fn(vlb_fn, q, x, t, key):
-        # Is product of gradients faster than Hessian? VLB ~ logL(x)
-        # jax.hessian(vlb_fn)
-        dL = jax.jacfwd(vlb_fn)(q, x, t, key)
-        return jnp.matmul(dL.T, dL)
-
-    def get_J_fn(vlb):
-        return lambda q, x, t, key: vlb(vdm, x, key, t)
-
-    @eqx.filter_jit
-    def observed_information(key, q, sample_fn, J_fn, n_samples):
-        # Get samples from model, at 'q' in parameter space
-        key_sample, key_J = jr.split(key)
-        keys = jr.split(key_sample, n_samples)
-        # sample_fn = get_sample_fn(model, int_beta, data_shape, dt0, t1)
-        x = jax.vmap(sample_fn, in_axes=(0, None))(keys, q)
-        # Calculate observed Fisher information under model (args ordered for argnum=0)
-        keys = jr.split(key_J, n_samples)
-        # L_x_q = jax.vmap(log_likelihood_fn, in_axes=(None, 0, 0))(q, x, keys)
-        Js = jax.vmap(J_fn, in_axes=(None, 0, 0))(q, x, keys)
-        F = Js.mean(axis=0)
-        return F
-
-    def get_observed_information_fn(sample_fn, log_likelihood_fn, n_samples):
-        return eqx.filter_jit(
-            lambda key, q: observed_information(
-                key, q, sample_fn, log_likelihood_fn, n_samples
-            )
-        )
-
-    def logdet(F):
-        a, b = jnp.linalg.slogdet(F)
-        return a * b
-
-"""
-
-def generate(key, vdm, data_shape):
-    @jax.jit
-    def sample_step(key, i, T, z_t):
-        key = jr.fold_in(key, i)
-        eps = jr.normal(key, z_t.shape)
-        
-        t = (T - i) / T 
-        s = (T - i - 1) / T
-
-        g_s = vdm.gamma(s)
-        g_t = vdm.gamma(t)
-
-        eps_hat = vdm.score_network(z_t, g_t)
-        
-        a = jax.nn.sigmoid(g_s)
-        b = jax.nn.sigmoid(g_t)
-        c = -jnp.expm1(g_t - g_s)
-        sigma_t = jnp.sqrt(_var(g_t))
-        z_s = jnp.sqrt(a / b) * (z_t - sigma_t * c * eps_hat) \
-            + jnp.sqrt((1. - a) * c) * eps
-        return z_s
-
-    # first generate latent
-    key, key_eps = jr.split(key)
-
-    # Prior sample
-    z_T = jr.normal(key_eps, data_shape)
-
-    def body_fn(i, z_t):
-        return sample_step(key, i, T_sample, z_t)
-
-    # Last latent sample (given zt above)
-    z_0 = jax.lax.fori_loop(
-        lower=0, upper=T_sample, body_fun=body_fn, init_val=z_T
-    )
-
-    gamma_0 = vdm.gamma(0.0)
-    var0 = _var(gamma_0)
-    z_0_rescaled = z_0 / np.sqrt(1. - var0)
-    # return z_0_rescaled #vdm.apply(params, z0_rescaled, conditioning, method=vdm.decode)
-    return decode(z_0_rescaled, gamma_0, key)
-
-def sample_fn(key, vdm, N_sample, T_sample, data_shape, sharding):
-    print("Sampling...")
-    if 0:
-        # sample z_T from the diffusion model
-        key, _ = jr.split(key)
-        z_T = jr.normal(key, (N_sample,) + data_shape)
-
-        if sharding is not None:
-            z_T = jax.device_put(z_T, sharding)
-
-        z = [z_T]
-
-        x_pred = []
-        for i in trange(T_sample):
-            key, _ = jr.split(key)
-            _z, _x_pred = sample_step(i, vdm, T_sample, z[-1], key, sharding)
-            z.append(_z)
-            x_pred.append(_x_pred)
-    else:
-        z = jr.normal(key, (N_sample,) + data_shape)
-        if sharding is not None:
-            z = jax.device_put(z, sharding)
-
-        # def body_fn(i, z_t_x):
-        #     z_t, _ = z_t_x
-        #     return sample_step(i, vdm, T_sample, z_t, key)
-        def body_fn(i, z_t):
-            fn = lambda z_t, i: sample_step(
-                i, vdm, T_sample, z_t, key
-            )
-            return fn(z_t, i) # z_t must be first argument
-
-        z = jax.lax.fori_loop(
-            lower=0, upper=T_sample, body_fun=body_fn, init_val=z 
-        )
-    key, _ = jr.split(key)
-    x_sample = data_generate_x(z[-1], vdm.gamma(0.), key)
-    print("...sampled.")
-    return jnp.asarray(z), jnp.asarray(x_pred), jnp.asarray(x_sample)
-"""
-# opt = optax.adamw(learning_rate)
-# opt = optax.chain(
-#     optax.clip_by_global_norm(1.0),  
-#     optax.scale_by_adam(),  
-#     # optax.scale_by_schedule(scheduler),  
-#     optax.scale(-1.0)
-# )
-
-# schedule = optax.warmup_cosine_decay_schedule(
-#     init_value=0.0,
-#     peak_value=learning_rate,
-#     warmup_steps=50,
-#     decay_steps=100,
-#     end_value=1e-5,
-# )
-
-# opt = optax.chain(
-#     # optax.clip_by_global_norm(1.0),  
-#     optax.adamw(learning_rate=learning_rate), # schedule
-# )

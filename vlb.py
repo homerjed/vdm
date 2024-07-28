@@ -1,9 +1,9 @@
-from typing import Tuple
+from typing import Optional, Union, Tuple
 import jax
 import jax.random as jr
 import jax.numpy as jnp
-import jax.scipy.stats as jss
 import equinox as eqx
+from jaxtyping import Key, Array
 
 from sde import _alpha_sigma
 
@@ -12,8 +12,8 @@ def _encode(x):
     return x 
 
 
-def _logprob(x, z_0_rescaled, gamma_0):
-    return jss.norm.pdf(x, loc=z_0_rescaled, scale=1e-3)
+def _p_x_z_log_prob(x, z_0_rescaled, gamma_0):
+    return jax.scipy.stats.norm.pdf(x, loc=z_0_rescaled, scale=1e-3)
 
 
 def _get_gamma_alpha_sigma(vdm, t):
@@ -23,11 +23,11 @@ def _get_gamma_alpha_sigma(vdm, t):
 
 def vlb(
     vdm: eqx.Module, 
-    x: jax.Array, 
-    key: jr.PRNGKey, 
-    t: float | jax.Array = None, 
-    shard: jax.sharding.Sharding | None = None
-) -> Tuple[jax.Array, Tuple[jax.Array, jax.Array, jax.Array]]:
+    key: Key, 
+    x: Array, 
+    t: Union[float, Array] = None,
+    shard: Optional[jax.sharding.Sharding] = None
+) -> Tuple[Array, Tuple[Array, ...]]:
 
     key, key_0, key_d, key_e = jr.split(key, 4)
 
@@ -42,12 +42,10 @@ def vlb(
     # 1. RECONSTRUCTION LOSS
     # Add noise and reconstruct
     eps_0 = jr.normal(key_0, shape=f.shape)
-    if shard is not None:
-        eps_0 = jax.device_put(eps_0, shard)
 
     z_0 = alpha_0 * f + sigma_0 * eps_0
     z_0_rescaled = f + jnp.exp(0.5 * gamma_0) * eps_0  # = z_0/sqrt(1-var)
-    loss_recon = -_logprob(f, z_0_rescaled, gamma_0)
+    loss_recon = -_p_x_z_log_prob(f, z_0_rescaled, gamma_0)
 
     # 2. LATENT LOSS
     # KL z1 with N(0,1) prior
@@ -57,14 +55,13 @@ def vlb(
     # 3. DIFFUSION LOSS
     # Sample z_t 
     eps = jr.normal(key_d, shape=f.shape)
-    if shard is not None:
-        eps = jax.device_put(eps, shard)
 
     # Marginal sample
     z_t = alpha_t * f + sigma_t * eps
 
     # Compute predicted noise
     eps_ = vdm.score(z_t, gamma_t, key=key_e)
+
     # Compute MSE of predicted noise
     loss_diff_mse = jnp.square(eps - eps_).sum()
 

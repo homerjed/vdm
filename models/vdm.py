@@ -1,12 +1,11 @@
-from typing import Optional
+from typing import Optional, Union
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import equinox as eqx
+from jaxtyping import Key, Array
 
 from .unet import UNet
-
-Array = jax.Array
 
 
 class VDM(eqx.Module):
@@ -16,13 +15,10 @@ class VDM(eqx.Module):
     def __init__(self, score_network, noise_network):
         self.score_network = score_network
         self.noise_network = noise_network
-
-    # def __call__(self, x, t, *, key):
-    #     gamma_t = self.noise_network(t)
-    #     return self.score_network(x, t, key=key)
     
     def score(self, x, gamma_t, *, key):
-        return self.score_network(x, jnp.atleast_1d(gamma_t), key=key)
+        gamma_t = jnp.atleast_1d(gamma_t)
+        return self.score_network(x, gamma_t, key=key)
 
     def gamma(self, t):
         return self.noise_network(t)
@@ -39,7 +35,7 @@ class cVDM(VDM):
 
 
 class FourierFeatures(eqx.Module):
-    def __call__(self, inputs):
+    def __call__(self, inputs: Array) -> Array:
         freqs = jnp.asarray(range(2, 8), dtype=inputs.dtype) #[0, 1, ..., 7]
         w = 2. ** freqs * 2. * jnp.pi
         w = jnp.tile(w, (inputs.size,))
@@ -85,34 +81,6 @@ class ScoreNetwork(eqx.Module):
         h = self.net(_gamma_t, z, key=key)
         return h
 
-# class ScoreNetwork(eqx.Module):
-#     gamma_0: float
-#     gamma_1: float
-#     fourier_features: Optional[eqx.Module] = None
-#     net: eqx.nn.MLP
-
-#     def __init__(self, in_size, width_size, depth, activation, gamma_0, gamma_1, fourier_features, *, key):
-#         key, _key = jr.split(key)
-#         self.gamma_0 = gamma_0
-#         self.gamma_1 = gamma_1
-#         self.fourier_features = fourier_features
-#         self.net = eqx.nn.MLP(
-#             39, #in_size + 1 if fourier_features is not None else 39 #in_size + 1 + (in_size + 1) * 6 * 2, 
-#             in_size, 
-#             width_size, 
-#             depth, 
-#             activation=activation, 
-#             key=_key)
-
-#     def __call__(self, z, gamma_t):
-#         _gamma_t = 2. * (gamma_t - self.gamma_0) / (self.gamma_1 - self.gamma_0) - 1.
-#         h = jnp.concatenate([z, _gamma_t]) 
-#         if self.fourier_features is not None:
-#             h_ff = self.fourier_features(h)
-#             h = jnp.concatenate([h, h_ff])
-#         h = self.net(h)
-#         return h
-
 
 class NoiseSchedule(eqx.Module):
     w: Array
@@ -124,7 +92,7 @@ class NoiseSchedule(eqx.Module):
         self.w = init_scale
         self.b = init_bias
 
-    def __call__(self, t):
+    def __call__(self, t: Array) -> Array:
         return abs(self.w) * t + self.b
 
 
@@ -140,7 +108,7 @@ class LinearMonotone(eqx.Module):
         if self.use_bias:
             self.bias = jnp.zeros((out_size,))
 
-    def __call__(self, x):
+    def __call__(self, x: Array) -> Array:
         x = jnp.abs(self.weight) @ x 
         if self.use_bias:
             x = x + self.bias
@@ -152,10 +120,10 @@ class NoiseScheduleNN(eqx.Module):
     nonlinear: bool = True
     weight: Array
     bias: Array
-    l2: eqx.Module
-    l3: eqx.Module
+    l2: LinearMonotone
+    l3: LinearMonotone
 
-    def __init__(self, gamma_0, gamma_1, *, key):
+    def __init__(self, gamma_0: Array, gamma_1: Array, *, key: Key):
         """ Montonically increasing linear layer, sigmoid in call => bias made positive """
         init_bias = gamma_0
         init_scale = gamma_1 - init_bias
@@ -168,11 +136,13 @@ class NoiseScheduleNN(eqx.Module):
         key_2, key_3 = jr.split(key)
         if self.nonlinear:
             self.l2 = LinearMonotone(
-                in_size=1, out_size=self.n_features, key=key_2)
+                in_size=1, out_size=self.n_features, key=key_2
+            )
             self.l3 = LinearMonotone(
-                in_size=self.n_features, out_size=1, use_bias=False, key=key_3)
+                in_size=self.n_features, out_size=1, use_bias=False, key=key_3
+            )
 
-    def __call__(self, t):
+    def __call__(self, t: Union[float, Array]) -> Array:
         t = jnp.atleast_1d(t)
         h = jnp.abs(self.weight) @ t + self.bias
         if self.nonlinear:

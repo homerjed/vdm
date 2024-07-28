@@ -27,7 +27,7 @@ def sample_step(
     z_t: jax.Array, 
     key: jr.PRNGKey, 
     sharding: jax.sharding.Sharding | None = None
-) -> Tuple[jax.Array, jax.Array]:
+) -> Tuple[jax.Array]:
     key_eps, key_time = jr.split(jr.fold_in(key, i))
     keys_time = jnp.asarray(jr.split(key_time, len(z_t)))
 
@@ -40,8 +40,8 @@ def sample_step(
     gamma_t = vdm.gamma(t)
 
     if sharding is not None:
-        eps, z_t, gamma_t, keys_time = jax.device_put(
-            (eps, z_t, gamma_t, keys_time), sharding
+        eps, z_t, keys_time = jax.device_put(
+            (eps, z_t, keys_time), sharding
         )
 
     # Was using vdm.score_network, be consistent with methods
@@ -68,7 +68,7 @@ def sample_fn(
     T_sample: int, 
     data_shape: Sequence[int], 
     sharding: jax.sharding.Sharding
-) -> Tuple[jax.Array, jax.Array, jax.Array]:
+) -> Tuple[jax.Array]:
     key_z, key_sample, key_loop = jr.split(key, 3)
 
     z = jr.normal(key_z, (N_sample,) + data_shape)
@@ -101,5 +101,3 @@ def sample_fn(
         z, gamma_0, key_samples
     )
     return z, x_pred, x_sample
-
-

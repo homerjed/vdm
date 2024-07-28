@@ -4,3 +4,4 @@ datasets/
 *.png
 *.pdf
 !generated.png
+old.py

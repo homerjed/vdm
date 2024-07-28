@@ -1,13 +1,10 @@
-import math
 from collections.abc import Callable
 from typing import Optional, Union
-
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-from einops import rearrange
-
 import equinox as eqx
+from einops import rearrange
 
 
 class SinusoidalPosEmb(eqx.Module):
@@ -15,11 +12,11 @@ class SinusoidalPosEmb(eqx.Module):
 
     def __init__(self, dim):
         half_dim = dim // 2
-        emb = math.log(10000) / (half_dim - 1)
+        emb = jnp.log(10000) / (half_dim - 1)
         self.emb = jnp.exp(jnp.arange(half_dim) * -emb)
 
     def __call__(self, x):
-        emb = x * self.emb
+        emb = x * jax.lax.stop_gradient(self.emb)
         emb = jnp.concatenate((jnp.sin(emb), jnp.cos(emb)), axis=-1)
         return emb
 
