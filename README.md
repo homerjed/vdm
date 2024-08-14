@@ -11,11 +11,20 @@ This design shares many similarities with a Variational Autoencoder (VAE) but un
 
 Here training is implemented with the continuous-time depth consistency loss as opposed to a discretised SDE in the DDPM methods. 
 
-
 ### Features
 * Conditional likelihood modelling,
 * exotic score-network architectures (more to be added),
 * multi-device training and inference.
+
+### Usage
+
+```
+pip install -e . 
+```
+
+```
+python main.py
+``` 
 
 <!-- ### To do:
 * ViT score network
