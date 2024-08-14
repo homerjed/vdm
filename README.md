@@ -9,7 +9,7 @@ A Variational Diffusion Model (VDM) is essentially an infinitely deep hierarchic
 
 This design shares many similarities with a Variational Autoencoder (VAE) but unlike the VAE, the model is fit with three loss terms: the consistency (diffusion) loss, the reconstruction loss, and the prior KL-divergence.
 
-Trained with continuous-time depth as opposed to a discretised SDE in the DDPM methods. 
+Here training is implemented with the continuous-time depth consistency loss as opposed to a discretised SDE in the DDPM methods. 
 
 
 ### Features
