@@ -1,10 +1,11 @@
-from typing import Tuple, Sequence
+from typing import Tuple, Sequence, Optional
 import jax
 import jax.random as jr
 import jax.numpy as jnp
 import equinox as eqx
+from jaxtyping import Key, Array
 
-from sde import _alpha_sigma
+from ._sde import _alpha_sigma
 
 
 def _decode(z_0_rescaled, gamma_0, key):
@@ -24,10 +25,11 @@ def sample_step(
     i: int, 
     vdm: eqx.Module, 
     T_sample: int, 
-    z_t: jax.Array, 
-    key: jr.PRNGKey, 
-    sharding: jax.sharding.Sharding | None = None
-) -> Tuple[jax.Array]:
+    z_t: Array, 
+    key: Key, 
+    sharding: Optional[jax.sharding.Sharding] = None
+) -> Tuple[Array]:
+
     key_eps, key_time = jr.split(jr.fold_in(key, i))
     keys_time = jnp.asarray(jr.split(key_time, len(z_t)))
 
@@ -40,11 +42,10 @@ def sample_step(
     gamma_t = vdm.gamma(t)
 
     if sharding is not None:
-        eps, z_t, keys_time = jax.device_put(
+        eps, z_t, keys_time = eqx.filter_shard(
             (eps, z_t, keys_time), sharding
         )
 
-    # Was using vdm.score_network, be consistent with methods
     _fn = jax.vmap(vdm.score_network, in_axes=(0, None, 0))
     eps_hat = _fn(z_t, gamma_t, keys_time)
 
@@ -62,20 +63,20 @@ def sample_step(
 
 
 def sample_fn(
-    key: jr.PRNGKey, 
+    key: Key, 
     vdm: eqx.Module, 
     N_sample: int, 
     T_sample: int, 
     data_shape: Sequence[int], 
-    sharding: jax.sharding.Sharding
-) -> Tuple[jax.Array]:
+    sharding: Optional[jax.sharding.Sharding] = None
+) -> Tuple[Array]:
     key_z, key_sample, key_loop = jr.split(key, 3)
 
     z = jr.normal(key_z, (N_sample,) + data_shape)
     if sharding is not None:
         z = jax.device_put(z, sharding)
 
-    def body_fn(i, z_t_and_x):
+    def _sample_step_i(i, z_t_and_x):
         z_t, _ = z_t_and_x
         key_i = jr.fold_in(key_loop, i)
         fn = lambda z_t, i: sample_step(
@@ -91,7 +92,7 @@ def sample_fn(
     z, x_pred = jax.lax.fori_loop(
         lower=0, 
         upper=T_sample, 
-        body_fun=body_fn, 
+        body_fun=_sample_step_i, 
         init_val=(z, jnp.zeros_like(z))
     )
 

@@ -7,4 +7,5 @@ datasets/
 !cifar10.png
 !mnist.png
 old.py
-configs/
+configs_/
+vdm.egg-info/

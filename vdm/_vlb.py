@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from jaxtyping import Key, Array
 
-from sde import _alpha_sigma
+from ._sde import _alpha_sigma
 
 
 def _encode(x):

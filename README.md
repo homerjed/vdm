@@ -3,6 +3,20 @@
 
 Implementation and extension of [Variational Diffusion Models (Kingma++21)](https://arxiv.org/abs/2203.04176) in `jax` and `equinox`. 
 
+### Synopsis 
+
+A Variational Diffusion Model (VDM) is essentially an infinitely deep hierarchical model with an analytic encoding model for each of the latent variables. 
+
+This design shares many similarities with a Variational Autoencoder (VAE) but unlike the VAE, the model is fit with three loss terms: the consistency (diffusion) loss, the reconstruction loss, and the prior KL-divergence.
+
+Trained with continuous-time depth as opposed to a discretised SDE in the DDPM methods. 
+
+
+### Features
+* Conditional likelihood modelling,
+* exotic score-network architectures (more to be added),
+* multi-device training and inference.
+
 <!-- ### To do:
 * ViT score network
 * Set transformer net -->

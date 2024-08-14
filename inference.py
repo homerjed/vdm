@@ -1,51 +1,16 @@
-import time
-import math
 import os
 import jax
 import jax.numpy as jnp
 import jax.random as jr 
-from jax.sharding import NamedSharding, Mesh, PartitionSpec as P
 import equinox as eqx
 import einops
 import numpy as np
 import matplotlib.pyplot as plt
-from tqdm import trange
 
 from models import VDM, NoiseScheduleNN, ScoreNetwork
 from sample import sample_fn
-
-
-def get_sharding():
-    n_devices = len(jax.local_devices())
-    print(f"Running on {n_devices} devices: \n{jax.local_devices()}")
-
-    use_sharding = n_devices > 1
-
-    # Sharding mesh: speed and allow training on high resolution?
-    if use_sharding:
-        # Split array evenly across data dimensions, this reshapes automatically
-        mesh = Mesh(jax.devices(), ('x',))
-        sharding = NamedSharding(mesh, P('x'))
-        print(f"Sharding:\n {sharding}")
-    else:
-        sharding = None
-    return sharding
-
-
-def plot_samples(samples, filename):
-    n_side = int(math.sqrt(len(samples))) 
-    samples = jnp.clip(samples, 0., 1.)
-    fig, axs = plt.subplots(n_side, n_side, dpi=300, figsize=(8., 8.))
-    c = 0
-    for i in range(n_side):
-        for j in range(n_side):
-            ax = axs[i, j]
-            ax.imshow(samples[c].transpose(1, 2, 0), cmap=cmap)
-            ax.axis("off")
-            c += 1
-    plt.subplots_adjust(wspace=0.01, hspace=0.01) 
-    plt.savefig(os.path.join(imgs_dir, filename), bbox_inches="tight")
-    plt.close()
+from plots import plot_samples
+from utils import get_sharding
 
 
 def image_shaper(images):
