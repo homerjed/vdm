@@ -26,6 +26,8 @@ pip install variational-diffusion-models
 python main.py
 ``` 
 
+See [examples](https://github.com/homerjed/vdm/tree/main/examples).
+
 ![alt text](https://github.com/homerjed/vdm/blob/master/figs/generated.png?raw=true)
 
 #### CIFAR10 
