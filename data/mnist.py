@@ -1,10 +1,12 @@
+import os
 import jax.random as jr 
+from jaxtyping import Key
 from torchvision import transforms, datasets
 
 from .utils import ScalerDataset, Scaler, _TorchDataLoader
 
 
-def mnist(key: jr.PRNGKey) -> ScalerDataset:
+def mnist(key: Key, data_dir: str) -> ScalerDataset:
     key_train, key_valid = jr.split(key)
     n_pix = 32 # Force power of 2 resolution
     data_shape = (1, n_pix, n_pix)
@@ -27,13 +29,13 @@ def mnist(key: jr.PRNGKey) -> ScalerDataset:
         ]
     )
     train_dataset = datasets.MNIST(
-        "/project/ls-gruen/users/jed.homer/data/mnist/", 
+        os.path.join(data_dir, "mnist/"), 
         train=True,
         download=True, 
         transform=train_transform
     )
     valid_dataset = datasets.MNIST(
-        "/project/ls-gruen/users/jed.homer/data/mnist/", 
+        os.path.join(data_dir, "mnist/"), 
         train=False, 
         download=True, 
         transform=valid_transform

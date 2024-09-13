@@ -7,10 +7,9 @@ import einops
 import numpy as np
 import matplotlib.pyplot as plt
 
-from models import VDM, NoiseScheduleNN, ScoreNetwork
-from sample import sample_fn
-from plots import plot_samples
-from utils import get_sharding
+from vdm.models import VDM, NoiseScheduleNN, ScoreNetwork
+from vdm.sample import sample_fn
+from vdm.utils import get_sharding
 
 
 def image_shaper(images):
@@ -49,7 +48,7 @@ if __name__ == "__main__":
     T_sample = 1000
     n_sample = 64
     # Plotting
-    proj_dir = "/project/ls-gruen/users/jed.homer/1pt_pdf/little_studies/vdm/"
+    proj_dir = "./"
     imgs_dir = os.path.join(proj_dir, "imgs_" + dataset_name)
 
     key_s, key_n = jr.split(key)
@@ -75,13 +74,13 @@ if __name__ == "__main__":
         zs, x_preds, samples = sample_fn(
             key, vdm, n_sample, T_sample, data_shape, sharding=sharding
         )
-        print("sampled", samples.min(), samples.max())
+        print("Sampled", samples.min(), samples.max())
 
         samples = image_shaper(dataset.scaler.reverse(samples))
         zs = image_shaper(dataset.scaler.reverse(zs))
         x_preds = image_shaper(dataset.scaler.reverse(x_preds))
 
-        print("scaled", samples.min(), samples.max())
+        print("Scaled", samples.min(), samples.max())
 
         fig, axs = plt.subplots(1, 2, figsize=(16., 8.), dpi=300) 
         ax = axs[0]

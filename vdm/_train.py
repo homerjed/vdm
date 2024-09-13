@@ -106,8 +106,7 @@ def train(
             losses += [(loss_train, loss_valid)]
             metrics += [(train_metrics, valid_metrics)]
             steps.set_postfix(
-                Lt=f"{losses[-1][0]:.3E}", 
-                Lv=f"{losses[-1][1]:.3E}"
+                Lt=f"{losses[-1][0]:.3E}", Lv=f"{losses[-1][1]:.3E}"
             )
 
             # Sample
@@ -117,13 +116,14 @@ def train(
                 )
                 samples = dataset.scaler.reverse(samples) # [-1, 1] -> [0, 1]
 
-                plot_samples(
-                    samples, filename=os.path.join(imgs_dir, f"samples_{s:06d}.png")
-                )
+                if imgs_dir is not None:
+                    plot_samples(
+                        samples, filename=os.path.join(imgs_dir, f"samples_{s:06d}.png")
+                    )
 
-                plot_metrics(
-                    vdm, losses, metrics, filename=os.path.join(imgs_dir, "loss.png")
-                )
+                    plot_metrics(
+                        vdm, losses, metrics, filename=os.path.join(imgs_dir, "loss.png")
+                    )
 
                 save_opt_state_and_model(
                     opt_state=opt_state,

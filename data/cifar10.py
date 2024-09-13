@@ -1,16 +1,12 @@
-import abc
-from typing import Tuple 
-from dataclasses import dataclass
-import jax
-import jax.numpy as jnp
+import os
 import jax.random as jr 
-import numpy as np
-import torch
+from jaxtyping import Key
 from torchvision import transforms, datasets
 
 from .utils import ScalerDataset, Scaler, _TorchDataLoader
 
-def cifar10(key: jr.PRNGKey) -> ScalerDataset:
+
+def cifar10(key: Key, data_dir: str) -> ScalerDataset:
     key_train, key_valid = jr.split(key)
     n_pix = 32 # Native resolution for CIFAR10 
     data_shape = (3, n_pix, n_pix)
@@ -34,13 +30,13 @@ def cifar10(key: jr.PRNGKey) -> ScalerDataset:
         ]
     )
     train_dataset = datasets.CIFAR10(
-        "/project/ls-gruen/users/jed.homer/data/cifar10/", 
+        os.path.join(data_dir, "cifar10/"), 
         train=True, 
         download=True, 
         transform=train_transform
     )
     valid_dataset = datasets.CIFAR10(
-        "/project/ls-gruen/users/jed.homer/data/cifar10/", 
+        os.path.join(data_dir, "cifar10/"), 
         train=False, 
         download=True, 
         transform=valid_transform

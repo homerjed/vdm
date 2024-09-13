@@ -16,6 +16,15 @@ def _p_x_z_log_prob(x, z_0_rescaled, gamma_0):
     return jax.scipy.stats.norm.pdf(x, loc=z_0_rescaled, scale=1e-3)
 
 
+def _p_x_z_log_prob_discrete(x, z_0_rescaled, gamma_0, vocab_size=256):
+    z_0_rescaled = z_0_rescaled.unsqueeze(-1) # (x.shape, 1)
+    x_lim = 1. - 1. / vocab_size
+    x_values = jnp.linspace(-x_lim, x_lim, vocab_size)
+    logits = -0.5 * jnp.exp(-gamma_0) * (z_0_rescaled - x_values) ** 2 # Broadcast x
+    log_probs = jax.nn.log_softmax(logits, axis=-1) # (x.shape, vocab_size)
+    return log_probs
+
+
 def _get_gamma_alpha_sigma(vdm, t):
     gamma_t = vdm.gamma(t)
     return gamma_t, *_alpha_sigma(gamma_t)

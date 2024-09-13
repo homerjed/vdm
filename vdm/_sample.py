@@ -28,7 +28,7 @@ def sample_step(
     z_t: Array, 
     key: Key, 
     sharding: Optional[jax.sharding.Sharding] = None
-) -> Tuple[Array]:
+) -> Tuple[Array, Array]:
 
     key_eps, key_time = jr.split(jr.fold_in(key, i))
     keys_time = jnp.asarray(jr.split(key_time, len(z_t)))
@@ -46,8 +46,8 @@ def sample_step(
             (eps, z_t, keys_time), sharding
         )
 
-    _fn = jax.vmap(vdm.score_network, in_axes=(0, None, 0))
-    eps_hat = _fn(z_t, gamma_t, keys_time)
+    score_fn = jax.vmap(vdm.score_network, in_axes=(0, None, 0))
+    eps_hat = score_fn(z_t, gamma_t, keys_time)
 
     a = jax.nn.sigmoid(-gamma_s)
     b = jax.nn.sigmoid(-gamma_t)
@@ -69,7 +69,7 @@ def sample_fn(
     T_sample: int, 
     data_shape: Sequence[int], 
     sharding: Optional[jax.sharding.Sharding] = None
-) -> Tuple[Array]:
+) -> Tuple[Array, ...]:
     key_z, key_sample, key_loop = jr.split(key, 3)
 
     z = jr.normal(key_z, (N_sample,) + data_shape)

@@ -19,16 +19,12 @@ Here training is implemented with the continuous-time depth consistency loss as 
 ### Usage
 
 ```
-pip install -e . 
+pip install variational-diffusion-models 
 ```
 
 ```
 python main.py
 ``` 
-
-<!-- ### To do:
-* ViT score network
-* Set transformer net -->
 
 ![alt text](https://github.com/homerjed/vdm/blob/master/figs/generated.png?raw=true)
 
